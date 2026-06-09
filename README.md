@@ -175,6 +175,10 @@ Supported task names:
 
 ## Usage (LLaDA)
 
+The LLaDA source currently provides the Window-Diffusion generation path. The
+benchmark workflow is reserved for a later update so that Dream and LLaDA can
+share a consistent evaluation interface.
+
 ### Quick Start
 
 ```
@@ -188,3 +192,9 @@ The main generation function is:
 
 - `window_tokens`: external window size (context tokens kept)
 - `active_tokens`: internal window size (critical tokens updated per step)
+
+### Benchmark Evaluation
+
+LLaDA benchmark scripts are not included in the current artifact package. This
+section is reserved for future commands covering the same task family used for
+Dream: GSM8K-CoT, MATH, HumanEval, and MBPP.
