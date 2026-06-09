@@ -9,7 +9,10 @@ Window-Diffusion improves inference efficiency by **token-level selective comput
 ```
 .
 ├── dream
-│   ├── demo.py
+│   ├── demo.py                 # Minimal Dream generation demo
+│   ├── eval.py                 # lm-evaluation-harness adapter
+│   ├── scripts
+│   │   └── run_benchmarks.sh   # Dream benchmark entry point
 │   └── model
 │       ├── cache_utils.py
 │       ├── configuration_dream.py
@@ -21,23 +24,36 @@ Window-Diffusion improves inference efficiency by **token-level selective comput
 
 ## Usage (Dream)
 
+The Dream implementation exposes Window-Diffusion through
+`model.diffusion_generate(...)`. The code is training-free: it loads a pretrained
+Dream checkpoint and changes only the inference procedure.
+
 ### Quick Start
+
+Install the basic runtime dependencies in your Python environment:
+
+```
+pip install torch transformers accelerate datasets evaluate lm-eval
+```
+
+Run the included Dream demo:
 
 ```
 cd dream
 python demo.py
 ```
 
+By default, `demo.py` uses `Dream-org/Dream-v0-Instruct-7B`. If you use a local
+checkpoint, edit `model_path` in `dream/demo.py`.
+
 ### Minimal Example
 
-```
-Minimal generation example
+The following example is the same usage pattern as `dream/demo.py`:
 
-The Dream implementation exposes Window-Diffusion via model.diffusion_generate(...) (see dream/demo.py):
-
+```python
 import torch
 from transformers import AutoTokenizer
-from dream.model.modeling_dream import DreamModel
+from model.modeling_dream import DreamModel
 
 model_path = "Dream-org/Dream-v0-Instruct-7B"  # or a local checkpoint
 device = "cuda"
@@ -75,7 +91,7 @@ with torch.no_grad():
         # Window-Diffusion knobs
         o_win_size=128,      # external window length
         i_win_size=32,       # internal window length (active tokens)
-        refresh_cycle=32,    # cache refresh interval (if enabled in your build)
+        refresh_cycle=32,    # phase-level KV refresh interval
         slide_window=True,
         early_stop=True,
 
@@ -89,10 +105,73 @@ print(text)
 
 ### Key knobs
 
-- `o_win_size`: external window length (range of undecoded context tokens kept around the decoding frontier)
-- `i_win_size`: internal window length (number of active undecoded tokens updated per step)
-- `refresh_cycle`: KV-cache refresh interval 
-- `early_stop`: enable adaptive generation length, allowing the diffusion process to terminate adaptively  rather than using a fixed number of generation steps
+- `o_win_size`: external window length; undecoded tokens outside this local prefix are pruned within the current phase.
+- `i_win_size`: internal window length; these active tokens are updated and used for logits at the current step.
+- `refresh_cycle`: phase-level KV-cache refresh interval.
+- `slide_window`: whether the internal active-token window moves as decoding progresses.
+- `early_stop`: enables adaptive-length generation once an EOS token is produced.
+
+### Benchmark Evaluation
+
+Dream benchmarks are run through `lm-evaluation-harness` with the local
+`dream/eval.py` adapter, which registers the model name `dream_window_diffusion`.
+The unified script supports GSM8K-CoT, MATH, HumanEval, and MBPP for Dream Base
+and Dream Instruct.
+
+Install the required evaluation dependencies in your Python environment:
+
+```
+pip install torch transformers accelerate datasets evaluate lm-eval
+```
+
+For code-generation tasks, allow the harness to execute task-provided tests:
+
+```
+export HF_ALLOW_CODE_EVAL=1
+export HF_DATASETS_TRUST_REMOTE_CODE=true
+```
+
+Run one benchmark with the default HuggingFace checkpoint:
+
+```
+bash dream/scripts/run_benchmarks.sh --model-type base --task gsm8k
+bash dream/scripts/run_benchmarks.sh --model-type instruct --task mbpp
+```
+
+Run all supported Dream benchmarks:
+
+```
+bash dream/scripts/run_benchmarks.sh --model-type base --task all
+bash dream/scripts/run_benchmarks.sh --model-type instruct --task all
+```
+
+Use a local checkpoint:
+
+```
+MODEL_PATH=/path/to/Dream-v0-Base-7B \
+  bash dream/scripts/run_benchmarks.sh --model-type base --task gsm8k
+```
+
+Run a quick smoke test with one example before launching a full benchmark:
+
+```
+CUDA_VISIBLE_DEVICES=0 LIMIT=1 \
+MODEL_PATH=/path/to/Dream-v0-Base-7B \
+  bash dream/scripts/run_benchmarks.sh --model-type base --task gsm8k
+```
+
+Without `LIMIT`, the script runs the full evaluation. Results are written to
+`runs/dream/<model-type>/<task>` by default. Override `OUTPUT_ROOT`,
+`CUDA_VISIBLE_DEVICES`, `DEVICE`, `MAIN_PROCESS_PORT`, or `LIMIT` as needed.
+
+Supported task names:
+
+| Script task | lm-eval task | Typical model type |
+| --- | --- | --- |
+| `gsm8k` | `gsm8k_cot` | base, instruct |
+| `math` | `minerva_math` | base, instruct |
+| `humaneval` | `humaneval` | base, instruct |
+| `mbpp` | `mbpp` / `mbpp_instruct` | base / instruct |
 
 ## Usage (LLaDA)
 
