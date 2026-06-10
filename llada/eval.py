@@ -137,10 +137,9 @@ class LLaDAWindowDiffusion(LM):
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(
             pretrained, trust_remote_code=trust_remote_code
         )
-        self.model = transformers.AutoModel.from_pretrained(
-            pretrained, **model_kwargs
-        ).eval()
+        self.model = transformers.AutoModel.from_pretrained(pretrained, **model_kwargs)
         self.model.to(self.device)
+        self.model.eval()
 
         if self.tokenizer.pad_token_id is None and self.tokenizer.eos_token_id is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token

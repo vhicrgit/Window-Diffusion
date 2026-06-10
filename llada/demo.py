@@ -17,7 +17,6 @@ def main():
         model_path,
         trust_remote_code=True,
         torch_dtype=dtype,
-        device_map="auto",
     ).to(device).eval()
 
     prompt_text = "Write a quicksort algorithm"
