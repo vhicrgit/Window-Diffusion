@@ -19,7 +19,13 @@ Window-Diffusion improves inference efficiency by **token-level selective comput
 │       ├── generation_utils.py
 │       └── modeling_dream.py
 └── llada
-    └── llada_window_diffusion.py
+    ├── demo.py                 # Minimal LLaDA generation demo
+    ├── eval.py                 # lm-evaluation-harness adapter
+    ├── model
+    │   ├── __init__.py
+    │   └── modeling_llada.py   # Window-Diffusion generation implementation
+    └── scripts
+        └── run_benchmarks.sh   # LLaDA benchmark entry point
 ```
 
 ## Usage (Dream)
@@ -175,26 +181,146 @@ Supported task names:
 
 ## Usage (LLaDA)
 
-The LLaDA source currently provides the Window-Diffusion generation path. The
-benchmark workflow is reserved for a later update so that Dream and LLaDA can
-share a consistent evaluation interface.
+The LLaDA implementation exposes Window-Diffusion through
+`llada/model/modeling_llada.py`. Like the Dream codepath, it is training-free:
+we load a pretrained LLaDA checkpoint and modify only the inference procedure.
 
 ### Quick Start
 
 ```
 cd llada
-python llada_window_diffusion.py
+python demo.py
+```
+
+By default, `demo.py` uses `GSAI-ML/LLaDA-8B-Base`. If you use a local
+checkpoint, edit `model_path` in `llada/demo.py` or pass
+`MODEL_PATH=/path/to/checkpoint` to the benchmark script below.
+
+### Minimal Example
+
+```python
+import torch
+from transformers import AutoModel, AutoTokenizer
+
+from model.modeling_llada import generate
+
+model_path = "GSAI-ML/LLaDA-8B-Base"  # or a local checkpoint
+device = "cuda"
+
+model = AutoModel.from_pretrained(
+    model_path,
+    trust_remote_code=True,
+    torch_dtype=torch.bfloat16,
+    attn_implementation="eager",
+).to(device).eval()
+tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+
+prompt = tokenizer(
+    "Write a quicksort algorithm.",
+    return_tensors="pt",
+    add_special_tokens=True,
+)["input_ids"].to(device)
+
+mask_id = tokenizer.mask_token_id if tokenizer.mask_token_id is not None else 126336
+
+with torch.no_grad():
+    output = generate(
+        model,
+        prompt,
+        steps=256,
+        gen_length=256,
+        temperature=0.0,
+        cfg_scale=0.0,
+        remasking="low_confidence",
+        mask_id=mask_id,
+        window_tokens=64,
+        active_tokens=16,
+        refresh_cycle=32,
+    )
+
+text = tokenizer.decode(output[0][prompt.shape[1]:], skip_special_tokens=True)
+print(text)
 ```
 
 ### Key knobs
 
-The main generation function is:
-
-- `window_tokens`: external window size (context tokens kept)
-- `active_tokens`: internal window size (critical tokens updated per step)
+- `window_tokens`: external window length; undecoded tokens outside this local context are pruned within the current phase.
+- `active_tokens`: internal window length; these tokens are updated online and used for decoding decisions.
+- `refresh_cycle`: phase-level KV-cache refresh interval. In the current implementation, this is the same concept as the generation phase length.
 
 ### Benchmark Evaluation
 
-LLaDA benchmark scripts are not included in the current artifact package. This
-section is reserved for future commands covering the same task family used for
-Dream: GSM8K-CoT, MATH, HumanEval, and MBPP.
+LLaDA benchmarks are run through `lm-evaluation-harness` with the local
+`llada/eval.py` adapter, which registers the model name
+`llada_window_diffusion`. The unified script supports the same task family as
+the Dream artifact: GSM8K, MATH, HumanEval, and MBPP.
+
+Install the required evaluation dependencies in your Python environment:
+
+```
+pip install torch transformers accelerate datasets evaluate lm-eval
+```
+
+For code-generation tasks, allow the harness to execute task-provided tests:
+
+```
+export HF_ALLOW_CODE_EVAL=1
+export HF_DATASETS_TRUST_REMOTE_CODE=true
+```
+
+Run one benchmark with the default HuggingFace checkpoint:
+
+```
+bash llada/scripts/run_benchmarks.sh --task gsm8k
+bash llada/scripts/run_benchmarks.sh --task humaneval
+```
+
+Run all supported LLaDA benchmarks:
+
+```
+bash llada/scripts/run_benchmarks.sh --task all
+```
+
+Use a local checkpoint:
+
+```
+MODEL_PATH=/path/to/LLaDA-8B-Base \
+  bash llada/scripts/run_benchmarks.sh --task gsm8k
+```
+
+Run a quick smoke test with one example before launching a full benchmark:
+
+```
+CUDA_VISIBLE_DEVICES=0 LIMIT=1 \
+MODEL_PATH=/path/to/LLaDA-8B-Base \
+  bash llada/scripts/run_benchmarks.sh --task gsm8k
+```
+
+Without `LIMIT`, the script runs the full evaluation. Results are written to
+`runs/llada/<task>` by default. Override `OUTPUT_ROOT`, `CUDA_VISIBLE_DEVICES`,
+`DEVICE`, `MAIN_PROCESS_PORT`, `LIMIT`, `WINDOW_TOKENS`, `ACTIVE_TOKENS`, or
+`REFRESH_CYCLE` as needed.
+
+The current LLaDA artifact implementation only supports `batch_size=1`. The
+included benchmark script enforces this constraint explicitly.
+
+The default LLaDA artifact settings follow Appendix A.2 of the paper:
+
+| Script task | lm-eval task | #shots | Max generation length |
+| --- | --- | --- | --- |
+| `gsm8k` | `gsm8k` | 4 | 256 |
+| `math` | `minerva_math` | 4 | 256 |
+| `humaneval` | `humaneval` | 0 | 512 |
+| `mbpp` | `mbpp` | 3 | 512 |
+
+Window-Diffusion uses `window_tokens=64`, `active_tokens=16`, and
+`refresh_cycle=32` across all four LLaDA tasks, with early stopping disabled.
+
+Reference results from the included LLaDA-Base experiment runs:
+
+| Task | Metric | Reference score |
+| --- | --- | --- |
+| `gsm8k` | exact match (strict) | 68.46 |
+| `math` | `math_verify` | 26.16 |
+| `humaneval` | pass@1 | 28.05 |
+| `mbpp` | pass@1 | 38.20 |
