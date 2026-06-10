@@ -18,7 +18,7 @@ Window-Diffusion improves inference efficiency by **token-level selective comput
 │       ├── configuration_dream.py
 │       ├── generation_utils.py
 │       └── modeling_dream.py
-└── llada
+├── llada
     ├── demo.py                 # Minimal LLaDA generation demo
     ├── eval.py                 # lm-evaluation-harness adapter
     ├── model
@@ -26,6 +26,10 @@ Window-Diffusion improves inference efficiency by **token-level selective comput
     │   └── modeling_llada.py   # Window-Diffusion generation implementation
     └── scripts
         └── run_benchmarks.sh   # LLaDA benchmark entry point
+└── scripts
+    ├── postprocess_code.py      # HumanEval post-processing and pass@1 check
+    ├── postprocess_mbpp_eval.py # MBPP post-processing and visible-test check
+    └── sanitize.py              # Helper used by postprocess_code.py
 ```
 
 ## Usage (Dream)
@@ -179,6 +183,12 @@ Supported task names:
 | `humaneval` | `humaneval` | base, instruct |
 | `mbpp` | `mbpp` / `mbpp_instruct` | base / instruct |
 
+For HumanEval and MBPP, see [Code Benchmark Post-processing](#code-benchmark-post-processing).
+These two code-generation benchmarks are sensitive to formatting wrappers such
+as Markdown fences or extra text. The paper follows the same post-processing
+practice used by the original Dream evaluation code, so the raw harness score
+may differ from the reported result before post-processing.
+
 ## Usage (LLaDA)
 
 The LLaDA implementation exposes Window-Diffusion through
@@ -324,3 +334,44 @@ Reference results from the included LLaDA-Base experiment runs:
 | `math` | `math_verify` | 26.16 |
 | `humaneval` | pass@1 | 28.05 |
 | `mbpp` | pass@1 | 38.20 |
+
+For HumanEval and MBPP, see [Code Benchmark Post-processing](#code-benchmark-post-processing).
+These two code-generation benchmarks are sensitive to formatting wrappers such
+as Markdown fences or extra text. The paper follows the same post-processing
+practice used by the original Dream evaluation code, so the raw harness score
+may differ from the reported result before post-processing.
+
+## Code Benchmark Post-processing
+
+HumanEval and MBPP need a small post-processing step before reporting the final
+code benchmark numbers. This step removes formatting artifacts from generated
+code and re-runs the task tests, preventing correct solutions from failing only
+because of wrappers such as Markdown code fences.
+
+HumanEval:
+
+```
+python scripts/postprocess_code.py runs/dream/base/humaneval/samples_humaneval_*.jsonl
+python scripts/postprocess_code.py runs/llada/humaneval/samples_humaneval_*.jsonl
+```
+
+The script prints the post-processed pass@1 score and writes a companion file
+with the suffix `.cleaned`.
+
+MBPP:
+
+```
+python scripts/postprocess_mbpp_eval.py \
+  --input runs/dream/base/mbpp/samples_mbpp_*.jsonl \
+  --output runs/dream/base/mbpp/samples_mbpp_postprocessed.jsonl
+
+python scripts/postprocess_mbpp_eval.py \
+  --input runs/llada/mbpp/samples_mbpp_*.jsonl \
+  --output runs/llada/mbpp/samples_mbpp_postprocessed.jsonl
+```
+
+The MBPP script truncates generations at completion markers, optionally writes a
+post-processed JSONL file, and prints the visible-test pass@1. For Dream
+Instruct, replace the output directory and sample glob with the corresponding
+`runs/dream/instruct/mbpp` files; depending on the harness version, the sample
+file may contain `mbpp_instruct` in its name.
